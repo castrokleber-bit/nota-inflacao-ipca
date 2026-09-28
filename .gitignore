@@ -7,3 +7,10 @@ node_modules/
 
 # Configuracao local do Claude Code: guarda caminhos absolutos da maquina.
 .claude/settings.local.json
+
+# Camada de IA: saídas por divulgação e assinatura local ficam fora do git.
+# O repositório e o site não carregam marca institucional (ver CLAUDE.md).
+analise/saida/
+analise/assinatura.local.txt
+# Link fixo do artifact (fica público quando compartilhado): não expor no repositório.
+analise/artifact.local.txt

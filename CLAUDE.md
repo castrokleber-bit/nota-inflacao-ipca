@@ -14,6 +14,10 @@ código, aos documentos ou ao texto da nota.** A nota **não tem assinatura**:
 termina no último bloco de conteúdo. O crédito do autor fica no rodapé da
 página, fora do texto que vai para o WhatsApp.
 
+Única exceção: a nota da camada de IA (`analise/`, seção 2) pode fechar com
+uma assinatura, que vive só em `analise/assinatura.local.txt`, fora do git.
+O texto da assinatura nunca entra em arquivo versionado.
+
 O objetivo é velocidade: a nota é descritiva e padronizada. Não é um produto
 analítico.
 
@@ -22,10 +26,23 @@ analítico.
 - **A NOTA é determinística.** É montada por funções puras a partir dos dados
   estruturados das APIs. **Nenhuma parte do texto da nota é gerada por IA.**
   Cada número no texto rastreia diretamente a um campo devolvido pela API.
-- **Se uma IA for acrescentada**, será só depois e fora da nota, para redigir
-  um rascunho de leitura analítica — claramente rotulado como sugestão, nunca
-  enviado automaticamente. (Hoje não existe: a página é 100% estática e uma
-  chave de API não pode viver nela.)
+- **A camada de IA fica fora do site.** Mora em `analise/` e roda pelo comando
+  `/nota-ipca` no Claude Code (`.claude/skills/nota-ipca/SKILL.md`). Usa os
+  dados determinísticos como insumo, e a IA redige um texto único que junta
+  números e causas. O resultado sai como artifact **privado** do Claude, com
+  selo de redação por IA, e nunca é enviado automaticamente. Não vai para o
+  site: a página é estática e uma chave de API não pode viver nela.
+- **A IA não inventa número.** `analise/verificar.py` barra a publicação se
+  um número do texto não vier da API ou do trecho de uma fonte citada, se
+  faltar um obrigatório (variação mensal, 12 meses, núcleos, difusão) ou se
+  uma fonte for posterior à divulgação. Se ele falhar, corrige-se o texto,
+  nunca o verificador. `analise/` reusa `_fmt` e `calcular_impacto` do
+  núcleo, para que o verificador exija o número exatamente como a nota o
+  formata.
+- **Versões do mesmo dia só acrescentam.** A nota das 9h sai sem os núcleos
+  (o BCB os publica depois do IBGE). A versão posterior mantém o texto
+  anterior intacto e só acrescenta o dado novo; `analise/versoes.py` confere
+  isso contra a versão arquivada.
 
 Por quê: a nota carrega números oficiais. Alucinação aqui publica um número
 falso como fato.
@@ -96,6 +113,12 @@ python -m pytest -q -m integration
 
 # rodar a pagina localmente
 python -m http.server 8777 --directory site
+
+# camada de IA (normalmente via /nota-ipca; saídas em analise/saida/, fora do git)
+python -m analise.coletar IPCA 202608
+python -m analise.coletar IPCA 202608 --atualizar   # nova versão quando o BCB publica os núcleos
+python -m analise.verificar IPCA 202608
+python -m analise.montar_pagina IPCA 202608
 ```
 
 ## 7. Regra de ouro: validação contra divulgação conhecida
@@ -124,14 +147,19 @@ revisão de série pelo BCB. Só no segundo caso se regenera o golden.
 
 ## 9. O que NÃO fazer
 
-- ❌ Gerar qualquer trecho da **nota** com IA.
-- ❌ Editorializar a nota (ela é descritiva).
+- ❌ Gerar qualquer trecho da **nota do site** com IA. A camada de IA vive só
+  em `analise/` (seção 2).
+- ❌ Editorializar a nota do site (ela é descritiva).
+- ❌ Publicar a nota da IA sem `analise/verificar.py` passar.
+- ❌ Versionar o texto da assinatura, o link do artifact
+  (`analise/artifact.local.txt`) ou as saídas de `analise/saida/`.
 - ❌ Enviar/circular qualquer coisa automaticamente. A página só **exibe** o
   texto para cópia humana.
 - ❌ Alterar dados numéricos sem fonte explícita da API.
 - ❌ Preencher dado ausente com valor aproximado (ver seção 3).
 - ❌ Mexer num montador sem mexer no par e rodar o gate (ver seção 5).
-- ❌ Reintroduzir qualquer assinatura ou linha de fonte na nota (ver seção 1).
+- ❌ Reintroduzir qualquer assinatura ou linha de fonte na nota do site (ver
+  seção 1).
 
 ## 10. Identidade visual
 
