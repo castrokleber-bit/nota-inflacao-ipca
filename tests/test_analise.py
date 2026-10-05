@@ -172,3 +172,33 @@ def test_ipca15_nao_espera_dado_do_bcb():
     from analise.montar_pagina import pendentes
     assert pendentes(dict(DADOS, indicador="IPCA-15", nucleo_12m=None, difusao=65.1)) == []
     assert pendentes(dict(DADOS, indicador="IPCA", nucleo_12m=None)) == ["média dos núcleos"]
+
+
+def test_sinal_trocado_falha():
+    """Regressao: o sinal era descartado, e "-0,67%" passava com a API em +0,67."""
+    a = copy.deepcopy(ANALISE)
+    a["paragrafos"][0]["texto"] = a["paragrafos"][0]["texto"].replace("0,67", "-0,67")
+    assert any("-0,67" in f for f in verificar(DADOS, NOTA, {}, a))
+
+
+def test_ano_fora_da_lista_antiga_nao_conta_como_numero():
+    """Anos saiam de uma lista fixa (2024-2027); 2028 passaria a falhar."""
+    a = copy.deepcopy(ANALISE)
+    a["paragrafos"][0]["texto"] += " Maior alta desde 2028."
+    assert verificar(DADOS, NOTA, {}, a) == []
+
+
+def test_doze_solto_precisa_de_origem():
+    """Só a janela "12 meses" é ignorada; um 12 qualquer precisa de origem."""
+    a = copy.deepcopy(ANALISE)
+    a["paragrafos"][0]["texto"] += " Subiu em 12 capitais."
+    assert any("(12)" in f for f in verificar(DADOS, NOTA, {}, a))
+
+
+def test_url_de_fonte_que_nao_e_http_e_neutralizada():
+    a = copy.deepcopy(ANALISE)
+    a["fontes"]["fonte_a"]["url"] = "javascript:alert(1)"
+    a["paragrafos"][0]["fontes"] = [{"id": "fonte_a", "trecho": ""}]
+    html = montar(DADOS, NOTA, a)
+    assert "javascript:" not in html
+    assert 'href="#"' in html

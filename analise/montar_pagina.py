@@ -39,6 +39,12 @@ def negrito(t):
     return re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", escape(t))
 
 
+def url_segura(url: str) -> str:
+    """Só http(s): a URL vem de texto redigido por IA, e um `javascript:` no
+    href rodaria ao clicar, mesmo escapado."""
+    return url if re.match(r"https?://", url, re.IGNORECASE) else "#"
+
+
 def pendentes(dados: dict) -> list[str]:
     """Dados do BCB que ainda não saíram (núcleos e difusão vêm depois do IBGE).
     No IPCA-15 não há o que esperar: núcleo não existe e a difusão sai com o IBGE."""
@@ -100,7 +106,7 @@ def montar(
 
     fontes_html = "".join(
         f'<li id="f{num[fid]}"><span class="fnum">{num[fid]}</span><span>'
-        f'<a href="{escape(an["fontes"][fid]["url"])}" target="_blank" rel="noopener">'
+        f'<a href="{escape(url_segura(an["fontes"][fid]["url"]))}" target="_blank" rel="noopener">'
         f'{escape(an["fontes"][fid]["nome"])}</a>'
         f' <span class="fdata">{date.fromisoformat(an["fontes"][fid]["data"]).strftime("%d/%m/%Y")}</span></span></li>'
         for fid in ordem

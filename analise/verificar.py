@@ -19,16 +19,27 @@ from nucleo.impacto import calcular_impacto
 from nucleo.montador import _fmt  # mesmo arredondamento HALF_UP da nota
 
 NUM = re.compile(r"-?\d+(?:\.\d{3})*(?:,\d+)?")
-DATA = re.compile(r"\b\d{1,2}/\d{2}(?:/\d{4})?\b|\b\d{1,2}º")
-IGNORAR = {"12", "2024", "2025", "2026", "2027"}  # janela de 12 meses e anos
+# Datas, a janela "12 meses"/"12m" e anos não são dados: saem antes da busca.
+DATA = re.compile(
+    r"\b\d{1,2}/\d{2}(?:/\d{4})?\b|\b\d{1,2}º|\b12\s*(?:meses|m)\b|\b(?:19|20)\d{2}\b(?!,\d)"
+)
 
 
 def _sem_sinal(conj) -> set[str]:
     return {x.lstrip("-") for x in conj}
 
 
+def _tem_origem(n: str, permitidos: set[str]) -> bool:
+    """Número sem sinal casa pelo valor absoluto ("queda de 0,32%" vale para
+    -0,32). Com sinal explícito, o sinal também tem de bater: "-0,32%" no
+    texto quando a API deu +0,32 é número trocado, não redação."""
+    if n.startswith("-"):
+        return n in permitidos
+    return n in _sem_sinal(permitidos)
+
+
 def numeros_da_api(dados: dict, nota: str, historico: dict) -> set[str]:
-    api = set(NUM.findall(nota))
+    api = set(NUM.findall(DATA.sub("", nota)))
     for k in ("variacao_mensal", "variacao_mensal_anterior", "acum_12m", "acum_12m_anterior",
               "nucleo_12m", "nucleo_12m_anterior", "variacao_mesmo_mes_ano_anterior"):
         if dados.get(k) is not None:
@@ -63,10 +74,8 @@ def verificar(dados: dict, nota: str, historico: dict, analise: dict) -> list[st
                 falhas.append(
                     f"parágrafo {n_par}: fonte {f['id']} ({fonte['data']}) é posterior à divulgação"
                 )
-        permitidos = _sem_sinal(permitidos)
         for n in NUM.findall(DATA.sub("", p["texto"])):
-            alvo = n.lstrip("-")
-            if alvo not in IGNORAR and alvo not in permitidos:
+            if not _tem_origem(n, permitidos):
                 falhas.append(f"parágrafo {n_par}: número sem origem ({n})")
 
     obrigatorios = {
