@@ -366,3 +366,83 @@ def test_nota_nao_tem_assinatura():
     assert "Kleber" not in nota
     # O ultimo bloco passa a ser o de difusao
     assert ultimo_bloco.startswith("\U0001f4ca")
+
+
+def test_queda_sai_sem_sinal_negativo():
+    """
+    Regressao: "queda de -0,32%" e "recuo de -0,15%". A palavra ja da o
+    sentido; o numero vem sem sinal.
+    """
+    r = _resultado_simples(var=-0.32, var_ant=-0.15)
+    r.variacao_mesmo_mes_ano_anterior = -0.08
+    nota = compor_nota(r)
+    assert "*queda de 0,32%*" in nota
+    assert "após recuo de 0,15% em março" in nota
+    assert "queda de 0,08% em abril de 2025" in nota
+    assert "de -0," not in nota.split("\n\n")[1]
+
+
+def test_variacao_que_arredonda_a_zero_e_estabilidade():
+    """Regressao: -0,004 virava "queda de -0,00%"."""
+    nota = compor_nota(_resultado_simples(var=0.001, var_ant=-0.004))
+    assert "*estabilidade (0,00%)*" in nota
+    assert "após estabilidade (0,00%) em março" in nota
+
+
+def test_comparacao_usa_numero_exibido():
+    """
+    Regressao (mesma classe da secao 3 do CLAUDE.md): a comparacao usava o
+    float cru, e 4,391 x 4,389 publicava "4,39%, acima dos 4,39%".
+    """
+    r = _resultado_simples(acum=4.391, acum_ant=4.389, difusao=65.32, difusao_anterior=65.28)
+    nota = compor_nota(r)
+    assert "ficou em *4,39%*, igual aos 4,39%" in nota
+    assert "ficou em *65,3%*, igual ao registrado em março (65,3%)" in nota
+
+
+def test_grupo_em_queda_nao_vira_destaque_de_alta():
+    """
+    Regressao: o filtro por impacto absoluto punha um grupo em queda entre os
+    "destaques" de alta, e o mesmo grupo voltava no paragrafo de deflacao.
+    """
+    grupos = [
+        ItemInflacao(7170, "1.Alimentação e bebidas", 1, 1.34, 21.45, "fixture"),
+        ItemInflacao(7660, "6.Saúde e cuidados pessoais", 1, 0.10, 13.60, "fixture"),
+        ItemInflacao(7445, "2.Habitação", 1, -0.70, 15.20, "fixture"),
+    ]
+    nota = compor_nota(_resultado_simples(grupos=grupos))
+    assert nota.count("Habitação") == 1
+    assert "destacam-se os grupos" not in nota
+
+
+def test_mes_sem_grupo_em_alta_mantem_deflacao():
+    """
+    Regressao: sem grupo em alta relevante a explicacao inteira sumia, inclusive
+    a deflacao; e o grupo que menos caiu era apresentado como o principal.
+    """
+    grupos = [
+        ItemInflacao(7445, "2.Habitação", 1, -0.90, 15.20, "fixture"),
+        ItemInflacao(7170, "1.Alimentação e bebidas", 1, -1.34, 21.45, "fixture"),
+    ]
+    subitens = [ItemInflacao(999, "1103001.gasolina", 4, -3.20, 5.28, "fixture")]
+    nota = compor_nota(_resultado_simples(var=-0.32, grupos=grupos, subitens=subitens))
+    assert "*reflete a queda do grupo Alimentação e bebidas*" in nota
+    assert "Habitação" not in nota
+    assert "Em sentido contrário" not in nota
+    assert "queda da *gasolina*" in nota
+
+
+@pytest.mark.parametrize("nome, artigo", [
+    ("gás de botijão", "do"),
+    ("macarrão", "do"),
+    ("higiene pessoal", "da"),
+    ("ônibus urbano", "do"),
+    ("cinema, teatro e concertos", "do"),
+    ("aves e ovos", "das"),
+    ("tubérculos, raízes e legumes", "dos"),
+    ("alimentação no domicílio", "da"),
+    ("passagem aérea", "da"),
+])
+def test_artigo_excecoes(nome, artigo):
+    from nucleo.montador import _artigo_de
+    assert _artigo_de(nome) == artigo

@@ -41,15 +41,20 @@ const MESES_ACENTUADOS = {
   "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro",
 };
 
-// Prefixos de itens femininos — usados em "a alta da/do <item>"
-const FEMININAS = [
-  "energia", "gasolina", "gasolina comum", "gasolina aditivada",
-  "carne", "farinha", "batata", "batata-inglesa",
-  "agua", "cerveja", "manteiga", "margarina",
-  "fruta", "maca", "banana", "uva", "alface",
-  "cenoura", "cebola", "ervilha", "abobrinha",
-  "televisao", "geladeira", "passagem",
-];
+// Exceções à regra de terminação de artigoDe, pela primeira palavra inteira
+// (sem acento). Comparação exata: o antigo teste por prefixo fazia "maca"
+// capturar "macarrão" e publicava "da macarrão".
+const ARTIGO_EXCECOES = new Map([
+  // femininos que não terminam em -a/-ção/-são/-dade/-gem
+  ["alface", "f"], ["ave", "f"], ["carne", "f"], ["couve", "f"], ["creche", "f"],
+  ["gripe", "f"], ["higiene", "f"], ["internet", "f"], ["lingerie", "f"],
+  ["maionese", "f"], ["manicure", "f"], ["mao", "f"], ["tv", "f"],
+  // masculinos terminados em -a
+  ["cha", "m"], ["cinema", "m"], ["dentista", "m"], ["fisioterapeuta", "m"],
+  ["fuba", "m"], ["sutia", "m"],
+  // singulares terminados em -s (não são plural)
+  ["gas", "m"], ["lapis", "m"], ["onibus", "m"], ["tenis", "m"],
+]);
 
 /** '202604' -> 'abril' */
 function mes(mesRef) {
@@ -80,11 +85,14 @@ function artigoDe(nome) {
   // \p{Mn} = marcas combinantes; equivale ao filtro de category(c) != "Mn".
   const nlAscii = nome.toLowerCase().normalize("NFD").replace(/\p{Mn}/gu, "");
   const primeira = nlAscii.trim().split(/[ ,(]/)[0];
+  if (ARTIGO_EXCECOES.has(primeira)) {
+    return ARTIGO_EXCECOES.get(primeira) === "f" ? "da" : "do";
+  }
   const plural = primeira.endsWith("s") && primeira.length > 2;
   const singular = plural ? primeira.slice(0, -1) : primeira;
-  const feminino =
-    FEMININAS.some((f) => primeira.startsWith(f)) ||
-    ["a", "cao", "sao", "dade", "gem"].some((s) => singular.endsWith(s));
+  const feminino = ARTIGO_EXCECOES.has(singular)
+    ? ARTIGO_EXCECOES.get(singular) === "f"
+    : ["a", "cao", "sao", "dade", "gem"].some((s) => singular.endsWith(s));
   if (feminino) return plural ? "das" : "da";
   return plural ? "dos" : "do";
 }
@@ -93,17 +101,37 @@ function direcao(v, alta = "alta", queda = "queda") {
   return v >= 0 ? alta : queda;
 }
 
-function avancoRecuo(v) {
-  return v >= 0 ? "avanço" : "recuo";
+/**
+ * O número como é exibido, em unidades da última casa: 4,39 -> 439.
+ * Toda comparação que vira texto usa isto, e não o float cru — senão
+ * 4,391 contra 4,389 publica "4,39%, acima dos 4,39%".
+ */
+function unidades(v, decimais = 2) {
+  return parseInt(fmt(v, decimais).replace(",", ""), 10);
 }
 
-function acimaAbaixo(atual, anterior) {
-  return atual > anterior ? "acima" : "abaixo";
+/**
+ * 'alta de 0,67%' / 'queda de 0,32%' / 'estabilidade (0,00%)'.
+ * A palavra já diz o sentido, então o número sai sem sinal: nada de
+ * "queda de -0,32%".
+ */
+function movimento(v, alta = "alta", queda = "queda") {
+  if (unidades(v) === 0) return "estabilidade (0,00%)";
+  return `${direcao(v, alta, queda)} de ${fmt(Math.abs(v))}%`;
+}
+
+/** 'acima' / 'abaixo' / 'igual', comparando os números como são exibidos. */
+function comparacao(atual, anterior, decimais = 2) {
+  const a = unidades(atual, decimais);
+  const b = unidades(anterior, decimais);
+  if (a === b) return "igual";
+  return a > b ? "acima" : "abaixo";
 }
 
 function emLinhaOuRelativo(v, ref, tol = 0.05) {
-  if (Math.abs(v - ref) <= tol) return "em linha com";
-  return v > ref ? "acima de" : "abaixo de";
+  const dif = unidades(v) - unidades(ref);
+  if (Math.abs(dif) <= unidades(tol)) return "em linha com";
+  return dif > 0 ? "acima de" : "abaixo de";
 }
 
 /** '0,29 ponto percentual (p.p.)' — para o primeiro grupo. */
@@ -129,6 +157,10 @@ function pp(v) {
 function idxVar(mesRef) {
   return Math.floor((parseInt(mesRef.slice(4, 6), 10) - 1) / 3) % 4;
 }
+
+// Variante cujas frases de queda não pressupõem um parágrafo de alta antes
+// ("Entre os subgrupos, a queda..."): usada quando nenhum grupo subiu.
+const IDX_NEUTRO = 2;
 
 // Abertura do parágrafo de alta (grupos de inflação — 1º grupo)
 const ABR_ALTA = [
@@ -233,21 +265,18 @@ function mesmoMesAnoAnterior(mesRef) {
 }
 
 export function blocoResultado(r, cfg) {
-  const dirMensal = direcao(r.variacao_mensal);
-  const avanco = avancoRecuo(r.variacao_mensal_anterior);
   const mesAnoAnt = mesmoMesAnoAnterior(r.mes_ref);
 
   // Comparação com mês anterior
   const compAnterior =
-    `após ${avanco} de ${fmt(r.variacao_mensal_anterior)}% ` +
+    `após ${movimento(r.variacao_mensal_anterior, "avanço", "recuo")} ` +
     `em ${mes(r.mes_ant)}`;
 
   // Comparação com mesmo mês do ano anterior (quando disponível)
   let comparacoes;
   if (r.variacao_mesmo_mes_ano_anterior !== null) {
-    const dirAnoAnt = direcao(r.variacao_mesmo_mes_ano_anterior);
     const compAnoAnt =
-      `e ${dirAnoAnt} de ${fmt(r.variacao_mesmo_mes_ano_anterior)}% ` +
+      `e ${movimento(r.variacao_mesmo_mes_ano_anterior)} ` +
       `em ${mes(mesAnoAnt)} de ${ano(mesAnoAnt)}`;
     comparacoes = `${compAnterior} ${compAnoAnt}.`;
   } else {
@@ -256,7 +285,7 @@ export function blocoResultado(r, cfg) {
 
   let texto =
     `${cfg.emoji_resultado} O ${r.indicador} registrou ` +
-    `*${dirMensal} de ${fmt(r.variacao_mensal)}%* ` +
+    `*${movimento(r.variacao_mensal)}* ` +
     `em ${mes(r.mes_ref)} de ${ano(r.mes_ref)}, ` +
     `${comparacoes}`;
 
@@ -274,16 +303,41 @@ export function blocoResultado(r, cfg) {
  * Parágrafos dos grupos + subitens de destaque; pode conter \n\n interno.
  * Ordem: inflação (grupos → subitem) → deflação (grupos → subitem).
  * Frases variam por trimestre para evitar repetição entre divulgações.
+ *
+ * Sem grupo em alta relevante (mês de deflação), a queda abre a explicação
+ * com as frases de destaque principal, e os parágrafos de queda seguintes
+ * perdem o conector de contraste ("Em sentido contrário"), que não teria a
+ * que se opor.
  */
 export function blocoExplicacao(r, cfg) {
+  const idx = idxVar(r.mes_ref);
   const grupos = gruposRelevantes(
     r.grupos,
     cfg.top_n_grupos,
     cfg.threshold_grupos,
   );
-  if (grupos.length === 0) return "";
+  const gqs = gruposQueda(r.grupos, cfg.top_n_queda, cfg.threshold_queda);
+  const partes = [];
+  let idxQueda;
 
-  const idx = idxVar(r.mes_ref);
+  if (grupos.length > 0) {
+    partes.push(paragrafoGrupos(r, grupos, cfg.emoji_explicacao, idx));
+    partes.push(...paragrafosAlta(r, cfg, idx));
+    if (gqs.length > 0) partes.push(paragrafoQuedaContraste(gqs, cfg, idx));
+    idxQueda = idx;
+  } else {
+    if (gqs.length > 0) {
+      partes.push(paragrafoGrupos(r, gqs, cfg.emoji_queda, idx));
+    }
+    idxQueda = IDX_NEUTRO;
+  }
+
+  partes.push(...paragrafosQueda(r, cfg, idxQueda));
+  return partes.join("\n\n");
+}
+
+/** Abertura da explicação: o grupo principal e até dois seguintes. */
+function paragrafoGrupos(r, grupos, emoji, idx) {
   const g1 = grupos[0];
   const g1n = stripNome(g1.nome);
   const dirG1 = direcao(g1.variacao);
@@ -295,7 +349,7 @@ export function blocoExplicacao(r, cfg) {
     nome: g1n,
   });
   let texto =
-    `${cfg.emoji_explicacao} ${abertura}, ` +
+    `${emoji} ${abertura}, ` +
     `com variação de ${fmt(g1.variacao)}% e impacto de ` +
     `${ppLongo(g1.impacto)} no índice do mês.`;
 
@@ -319,8 +373,12 @@ export function blocoExplicacao(r, cfg) {
       `com variação de ${fmt(g3.variacao)}% ` +
       `e impacto de ${pp(g3.impacto)}`;
   }
+  return texto;
+}
 
-  const partes = [texto];
+/** Subgrupo, item e subitem de maior impacto positivo. */
+function paragrafosAlta(r, cfg, idx) {
+  const partes = [];
 
   // --- INFLAÇÃO: subgrupo de maior impacto (nivel 2) ---
   const subgrupo = topSubitem(r.subitens, 2);
@@ -370,34 +428,39 @@ export function blocoExplicacao(r, cfg) {
     );
   }
 
-  // --- DEFLAÇÃO: grupos com maior queda ---
-  const gqs = gruposQueda(r.grupos, cfg.top_n_queda, cfg.threshold_queda);
-  if (gqs.length > 0) {
-    let textoQueda;
-    if (gqs.length === 1) {
-      const gq = gqs[0];
-      const aberturaQ = preencher(ABR_QUEDA_1[idx], {
-        nome: stripNome(gq.nome),
-      });
-      textoQueda =
-        `${cfg.emoji_queda} ${aberturaQ}, ` +
-        `com variação de ${fmt(gq.variacao)}% e impacto de ` +
-        `${pp(gq.impacto)} no índice do mês.`;
-    } else {
-      const [gq1, gq2] = gqs;
-      textoQueda =
-        `${cfg.emoji_queda} ` +
-        preencher(ABR_QUEDA_2[idx], {
-          n1: stripNome(gq1.nome),
-          v1: fmt(gq1.variacao),
-          i1: pp(gq1.impacto),
-          n2: stripNome(gq2.nome),
-          v2: fmt(gq2.variacao),
-          i2: pp(gq2.impacto),
-        });
-    }
-    partes.push(textoQueda);
+  return partes;
+}
+
+/** Grupos em queda, em contraste com o parágrafo de alta que os precede. */
+function paragrafoQuedaContraste(gqs, cfg, idx) {
+  if (gqs.length === 1) {
+    const gq = gqs[0];
+    const aberturaQ = preencher(ABR_QUEDA_1[idx], {
+      nome: stripNome(gq.nome),
+    });
+    return (
+      `${cfg.emoji_queda} ${aberturaQ}, ` +
+      `com variação de ${fmt(gq.variacao)}% e impacto de ` +
+      `${pp(gq.impacto)} no índice do mês.`
+    );
   }
+  const [gq1, gq2] = gqs;
+  return (
+    `${cfg.emoji_queda} ` +
+    preencher(ABR_QUEDA_2[idx], {
+      n1: stripNome(gq1.nome),
+      v1: fmt(gq1.variacao),
+      i1: pp(gq1.impacto),
+      n2: stripNome(gq2.nome),
+      v2: fmt(gq2.variacao),
+      i2: pp(gq2.impacto),
+    })
+  );
+}
+
+/** Subgrupo, item e subitem de maior deflação. */
+function paragrafosQueda(r, cfg, idx) {
+  const partes = [];
 
   // --- DEFLAÇÃO: subgrupo de maior queda (nivel 2) ---
   const subgrupoQ = topSubitemQueda(r.subitens, 2, cfg.threshold_queda);
@@ -444,15 +507,17 @@ export function blocoExplicacao(r, cfg) {
     );
   }
 
-  return partes.join("\n\n");
+  return partes;
 }
 
 export function blocoAcumulado(r, cfg) {
-  const rel = acimaAbaixo(r.acum_12m, r.acum_12m_anterior);
+  const rel = { acima: "acima dos", abaixo: "abaixo dos", igual: "igual aos" }[
+    comparacao(r.acum_12m, r.acum_12m_anterior)
+  ];
   return (
     `${cfg.emoji_acumulado} O *${r.indicador} acumulado em 12 meses* ` +
     `até ${mes(r.mes_ref)} ficou em *${fmt(r.acum_12m)}%*, ` +
-    `${rel} dos ${fmt(r.acum_12m_anterior)}% ` +
+    `${rel} ${fmt(r.acum_12m_anterior)}% ` +
     `registrados nos 12 meses encerrados em ${mes(r.mes_ant)}.`
   );
 }
@@ -474,9 +539,13 @@ export function blocoNucleo(r, cfg) {
   // havendo só um dado, informa-se só ele.
   if (r.nucleo_12m_anterior === null) return `${base}.`;
 
-  const rel = acimaAbaixo(r.nucleo_12m, r.nucleo_12m_anterior);
+  const rel = {
+    acima: "ligeiramente acima dos",
+    abaixo: "ligeiramente abaixo dos",
+    igual: "igual aos",
+  }[comparacao(r.nucleo_12m, r.nucleo_12m_anterior)];
   return (
-    `${base}, ligeiramente ${rel} dos ` +
+    `${base}, ${rel} ` +
     `${fmt(r.nucleo_12m_anterior)}% no acumulado até ${mes(r.mes_ant)}.`
   );
 }
@@ -485,12 +554,14 @@ export function blocoDifusao(r, cfg) {
   if (r.difusao === null) return null;
   const dif = fmt(r.difusao, 1);
   if (r.difusao_anterior !== null) {
-    const rel = acimaAbaixo(r.difusao, r.difusao_anterior);
+    const rel = { acima: "acima do", abaixo: "abaixo do", igual: "igual ao" }[
+      comparacao(r.difusao, r.difusao_anterior, 1)
+    ];
     const ant = fmt(r.difusao_anterior, 1);
     return (
       `${cfg.emoji_difusao} O *índice de difusão*, que mede a disseminação ` +
       `das altas de preços entre os itens que compõem o ${r.indicador}, ` +
-      `ficou em *${dif}%*, ${rel} do registrado em ` +
+      `ficou em *${dif}%*, ${rel} registrado em ` +
       `${mes(r.mes_ant)} (${ant}%).`
     );
   }

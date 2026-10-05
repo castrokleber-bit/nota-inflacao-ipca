@@ -80,31 +80,37 @@ def _parse_float(s) -> float | None:
         return None
 
 
+
+
 def _fetch(
     tabela: int,
-    periodo: str,
+    periodos: list[str],
     variaveis: list[int],
     cats,
-) -> dict[int, dict[int, tuple[str, float]]]:
+) -> dict[str, dict[int, dict[int, tuple[str, float]]]]:
     """
-    Chama a API de Agregados e retorna {var_id: {cat_id: (nome, valor)}}.
+    Chama a API de Agregados para um ou mais períodos de uma vez e retorna
+    {periodo: {var_id: {cat_id: (nome, valor)}}}.
     cats: lista de ints ou a string literal "all".
     Categorias sem dado disponível ("...") são omitidas do resultado.
     """
     vars_str = "|".join(str(v) for v in variaveis)
     cats_str = cats if cats == "all" else ",".join(str(c) for c in cats)
     url = (
-        f"{_BASE}/{tabela}/periodos/{periodo}/variaveis/{vars_str}"
+        f"{_BASE}/{tabela}/periodos/{'|'.join(periodos)}/variaveis/{vars_str}"
         f"?localidades=N1[all]&classificacao=315[{cats_str}]"
     )
     resp = httpx.get(url, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
-    result: dict[int, dict[int, tuple[str, float]]] = {}
+    result: dict[str, dict[int, dict[int, tuple[str, float]]]] = {
+        p: {} for p in periodos
+    }
     for bloco in data:
         var_id = int(bloco["id"])
-        result[var_id] = {}
+        for p in periodos:
+            result[p][var_id] = {}
         for entrada in bloco.get("resultados", []):
             cat_d = entrada["classificacoes"][0]["categoria"]
             cat_id = int(next(iter(cat_d)))
@@ -112,11 +118,59 @@ def _fetch(
             series = entrada.get("series", [])
             if not series:
                 continue
-            val_str = series[0]["serie"].get(periodo)
-            val = _parse_float(val_str)
-            if val is not None:
-                result[var_id][cat_id] = (cat_nome, val)
+            for p in periodos:
+                val = _parse_float(series[0]["serie"].get(p))
+                if val is not None:
+                    result[p][var_id][cat_id] = (cat_nome, val)
     return result
+
+
+def _itens(
+    d: dict[int, dict[int, tuple[str, float]]],
+    vm: int,
+    vp: int,
+    fonte: str,
+) -> tuple[list[ItemInflacao], list[ItemInflacao]]:
+    """
+    Grupos (nível 1, na ordem de _CATS_GRUPO) e itens de nível >= 2 (na ordem
+    da resposta), ambos ordenados por impacto desc. Só entra quem tem
+    variação e peso.
+    """
+    por_var, por_peso = d.get(vm, {}), d.get(vp, {})
+
+    grupos: list[ItemInflacao] = []
+    for cat_id in _CATS_GRUPO:
+        entry_vm = por_var.get(cat_id)
+        entry_vp = por_peso.get(cat_id)
+        if entry_vm and entry_vp:
+            grupos.append(ItemInflacao(
+                cat_id=cat_id,
+                nome=entry_vm[0],
+                nivel=1,
+                variacao=entry_vm[1],
+                peso=entry_vp[1],
+                fonte=fonte,
+            ))
+    grupos.sort(key=lambda x: x.impacto, reverse=True)
+
+    subitens: list[ItemInflacao] = []
+    for cat_id, (cat_nome, variacao) in por_var.items():
+        nivel = _nivel_from_nome(cat_nome)
+        if nivel < 2:
+            continue
+        entry_vp = por_peso.get(cat_id)
+        if entry_vp is None:
+            continue
+        subitens.append(ItemInflacao(
+            cat_id=cat_id,
+            nome=cat_nome,
+            nivel=nivel,
+            variacao=variacao,
+            peso=entry_vp[1],
+            fonte=fonte,
+        ))
+    subitens.sort(key=lambda x: x.impacto, reverse=True)
+    return grupos, subitens
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +182,11 @@ def buscar_resultado(indicador: str, mes_ref: str) -> ResultadoInflacao:
     Busca o resultado do IPCA ou IPCA-15 para o período informado (AAAAMM)
     e retorna um ResultadoInflacao com grupos e subitens ordenados por impacto.
 
+    Três requisições: índice geral do mês e do anterior (uma só, dois
+    períodos), mesmo mês do ano anterior (opcional, à parte porque pode não
+    existir na tabela) e todas as categorias do mês, de onde saem grupos e
+    subitens.
+
     difusao, nucleo e projeções ficam None; preenchidos por bcb.enriquecer().
     """
     conf = _CONF[indicador]
@@ -136,61 +195,25 @@ def buscar_resultado(indicador: str, mes_ref: str) -> ResultadoInflacao:
     mes_ant = _mes_anterior(mes_ref)
     fonte = f"IBGE SIDRA tabela {tab}"
 
-    # 1. Índice geral — mês de referência
-    d_cur = _fetch(tab, mes_ref, [vm, va12], [_CAT_GERAL])
+    # 1. Índice geral — mês de referência e mês anterior
+    d_geral = _fetch(tab, [mes_ant, mes_ref], [vm, va12], [_CAT_GERAL])
+    d_cur, d_ant = d_geral[mes_ref], d_geral[mes_ant]
     variacao_mensal = d_cur[vm][_CAT_GERAL][1]
     acum_12m = d_cur[va12][_CAT_GERAL][1]
-
-    # 2. Índice geral — mês anterior
-    d_ant = _fetch(tab, mes_ant, [vm, va12], [_CAT_GERAL])
     variacao_mensal_anterior = d_ant[vm][_CAT_GERAL][1]
     acum_12m_anterior = d_ant[va12][_CAT_GERAL][1]
 
-    # 2b. Mesmo mês do ano anterior (comparação interanual no bloco_resultado)
+    # 2. Mesmo mês do ano anterior (comparação interanual no bloco_resultado)
     mes_ano_ant = _mesmo_mes_ano_anterior(mes_ref)
     try:
-        d_ano_ant = _fetch(tab, mes_ano_ant, [vm], [_CAT_GERAL])
+        d_ano_ant = _fetch(tab, [mes_ano_ant], [vm], [_CAT_GERAL])[mes_ano_ant]
         variacao_mesmo_mes_ano_anterior: float | None = d_ano_ant[vm][_CAT_GERAL][1]
     except Exception:
         variacao_mesmo_mes_ano_anterior = None
 
-    # 3. Grupos — variação + peso, mês de referência
-    d_g = _fetch(tab, mes_ref, [vm, vp], _CATS_GRUPO)
-    grupos: list[ItemInflacao] = []
-    for cat_id in _CATS_GRUPO:
-        entry_vm = d_g.get(vm, {}).get(cat_id)
-        entry_vp = d_g.get(vp, {}).get(cat_id)
-        if entry_vm and entry_vp:
-            grupos.append(ItemInflacao(
-                cat_id=cat_id,
-                nome=entry_vm[0],
-                nivel=1,
-                variacao=entry_vm[1],
-                peso=entry_vp[1],
-                fonte=f"{fonte} var {vm},{vp} periodo {mes_ref}",
-            ))
-    grupos.sort(key=lambda x: x.impacto, reverse=True)
-
-    # 4. Todos os itens (nível >= 2) — variação + peso, mês de referência
-    #    Usado para encontrar o subitem de maior impacto individual
-    d_all = _fetch(tab, mes_ref, [vm, vp], "all")
-    subitens: list[ItemInflacao] = []
-    for cat_id, (cat_nome, variacao) in d_all.get(vm, {}).items():
-        nivel = _nivel_from_nome(cat_nome)
-        if nivel < 2:
-            continue
-        entry_vp = d_all.get(vp, {}).get(cat_id)
-        if entry_vp is None:
-            continue
-        subitens.append(ItemInflacao(
-            cat_id=cat_id,
-            nome=cat_nome,
-            nivel=nivel,
-            variacao=variacao,
-            peso=entry_vp[1],
-            fonte=f"{fonte} var {vm},{vp} periodo {mes_ref}",
-        ))
-    subitens.sort(key=lambda x: x.impacto, reverse=True)
+    # 3. Todas as categorias — variação + peso, mês de referência
+    d_all = _fetch(tab, [mes_ref], [vm, vp], "all")[mes_ref]
+    grupos, subitens = _itens(d_all, vm, vp, f"{fonte} var {vm},{vp} periodo {mes_ref}")
 
     return ResultadoInflacao(
         indicador=indicador,
@@ -206,3 +229,16 @@ def buscar_resultado(indicador: str, mes_ref: str) -> ResultadoInflacao:
         fonte_variacao=f"{fonte} var {vm} periodo {mes_ref}",
         fonte_acum=f"{fonte} var {va12} periodo {mes_ref}",
     )
+
+
+def buscar_variacoes(indicador: str, mes: str) -> dict[str, float]:
+    """
+    {nome: variação} de grupos e itens de nível >= 2 num mês, com uma só
+    requisição. Mesmo critério de buscar_resultado (só quem tem peso), para
+    servir de histórico à camada de análise sem baixar o resultado inteiro.
+    """
+    conf = _CONF[indicador]
+    tab, vm, vp = conf["tabela"], conf["var_mensal"], conf["var_peso"]
+    d = _fetch(tab, [mes], [vm, vp], "all")[mes]
+    grupos, subitens = _itens(d, vm, vp, "")
+    return {i.nome: i.variacao for i in grupos + subitens}

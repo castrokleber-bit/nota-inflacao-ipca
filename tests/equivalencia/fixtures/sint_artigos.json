@@ -1,0 +1,78 @@
+{
+  "indicador": "IPCA",
+  "mes_ref": "202604",
+  "mes_ant": "202603",
+  "variacao_mensal": 0.67,
+  "variacao_mensal_anterior": 0.88,
+  "acum_12m": 4.39,
+  "acum_12m_anterior": 4.14,
+  "grupos": [
+    {
+      "cat_id": 7170,
+      "nome": "1.Alimentação e bebidas",
+      "nivel": 1,
+      "variacao": 1.34,
+      "peso": 21.45,
+      "fonte": "sintetico"
+    }
+  ],
+  "subitens": [
+    {
+      "cat_id": 3002,
+      "nome": "3101.Macarrão",
+      "nivel": 3,
+      "variacao": 4.0,
+      "peso": 1.5,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 3001,
+      "nome": "31.Higiene pessoal",
+      "nivel": 2,
+      "variacao": 1.2,
+      "peso": 3.0,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 3003,
+      "nome": "3101001.Gás de botijão",
+      "nivel": 4,
+      "variacao": 3.0,
+      "peso": 1.1,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 3004,
+      "nome": "32.Aves e ovos",
+      "nivel": 2,
+      "variacao": -2.0,
+      "peso": 3.0,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 3005,
+      "nome": "3201.Cinema, teatro e concertos",
+      "nivel": 3,
+      "variacao": -5.0,
+      "peso": 1.2,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 3006,
+      "nome": "3201001.Ônibus urbano",
+      "nivel": 4,
+      "variacao": -4.0,
+      "peso": 2.0,
+      "fonte": "sintetico"
+    }
+  ],
+  "difusao": null,
+  "difusao_anterior": null,
+  "nucleo_12m": null,
+  "nucleo_12m_anterior": null,
+  "projecao_focus": null,
+  "url_ibge": null,
+  "variacao_mesmo_mes_ano_anterior": null,
+  "fonte_variacao": "",
+  "fonte_acum": ""
+}

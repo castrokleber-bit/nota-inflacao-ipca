@@ -7,6 +7,9 @@
  * Difusão IPCA-15:
  *   Não existe série SGS própria (verificado jun/2026).
  *   Calculada a partir dos subitens da tabela IBGE 7062 (parcela com var > 0).
+ *
+ * Requisições: uma por série, cobrindo de uma vez todos os meses que a nota
+ * usa (13 meses para os núcleos, 2 para a difusão). São 6 no IPCA.
  */
 import { arredondar } from "./numeros.js";
 import { calcularDifusao } from "./impacto.js";
@@ -32,21 +35,17 @@ const CONJUNTO_MEDIA = ["MS", "EX0", "DP", "EX3", "P55"];
 // Helpers internos
 // ---------------------------------------------------------------------------
 
-/** (dataInicial, dataFinal) dd/mm/aaaa para os 12m encerrados em mesRef. */
-function intervalo12m(mesRef) {
-  const ano = parseInt(mesRef.slice(0, 4), 10);
-  const m = parseInt(mesRef.slice(4), 10);
-  let mIni = m - 11;
-  let anoIni = ano;
-  if (mIni <= 0) {
-    mIni += 12;
-    anoIni -= 1;
-  }
-  const dois = (n) => String(n).padStart(2, "0");
-  return [`01/${dois(mIni)}/${anoIni}`, `28/${dois(m)}/${ano}`];
+/** '202604', 11 -> '202505' */
+function mesMenos(mesRef, n) {
+  const total =
+    parseInt(mesRef.slice(0, 4), 10) * 12 + parseInt(mesRef.slice(4), 10) - 1 - n;
+  return `${Math.floor(total / 12)}${String((total % 12) + 1).padStart(2, "0")}`;
 }
 
-/** Registros da série SGS no intervalo. Devolve [] em caso de erro. */
+/**
+ * Registros da série SGS no intervalo (dd/mm/aaaa). Devolve [] em caso de
+ * erro, série sem dados ou resposta fora do formato esperado (lista).
+ */
 async function sgsFetch(codigo, ini, fim) {
   const url =
     BASE_SGS.replace("{}", String(codigo)) +
@@ -58,7 +57,8 @@ async function sgsFetch(codigo, ini, fim) {
     // correspondente some da nota — que e a politica do projeto.
     const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!resp.ok) return [];
-    return (await resp.json()) ?? [];
+    const dados = await resp.json();
+    return Array.isArray(dados) ? dados : [];
   } catch {
     return [];
   }
@@ -70,59 +70,73 @@ function parseFloatBr(s) {
   return Number.isNaN(v) ? null : v;
 }
 
-/** Valor da série para mesRef (AAAAMM), ou null se indisponível. */
-async function buscarValorMes(codigo, mesRef) {
-  const m = mesRef.slice(4);
-  const a = mesRef.slice(0, 4);
-  const data = `01/${m}/${a}`;
-  const dados = await sgsFetch(codigo, data, data);
-  if (dados.length === 0) return null;
-  return parseFloatBr(dados[0].valor);
+/**
+ * Valores mensais da série entre mesIni e mesFim (AAAAMM), num Map por mês.
+ * Cada valor fica sob o mês que o próprio registro declara no campo `data`:
+ * um registro de outro mês nunca é tomado pelo mês pedido.
+ */
+async function serieMensal(codigo, mesIni, mesFim) {
+  const ini = `01/${mesIni.slice(4)}/${mesIni.slice(0, 4)}`;
+  const fim = `01/${mesFim.slice(4)}/${mesFim.slice(0, 4)}`;
+  const serie = new Map();
+  for (const d of await sgsFetch(codigo, ini, fim)) {
+    const data = d && typeof d === "object" ? String(d.data ?? "") : "";
+    if (data.length !== 10) continue;
+    const mes = data.slice(6, 10) + data.slice(3, 5);
+    if (mesIni <= mes && mes <= mesFim) serie.set(mes, parseFloatBr(d.valor));
+  }
+  return serie;
 }
 
-/**
- * Acumulado em 12 meses (composto) da série SGS encerrado em mesRef.
- * Devolve null se a série tiver menos de 12 observações no período.
- */
-async function acum12mSgs(codigo, mesRef) {
-  const [ini, fim] = intervalo12m(mesRef);
-  const dados = await sgsFetch(codigo, ini, fim);
-  if (dados.length < 12) return null;
+/** Acumulado em 12 meses (composto) encerrado em mesRef, ou null se faltar mês. */
+function acum12m(serie, mesRef) {
   let prod = 1.0;
-  for (const d of dados) {
-    const val = parseFloatBr(d.valor);
-    if (val === null) return null;
+  for (let n = 11; n >= 0; n--) {
+    const val = serie.get(mesMenos(mesRef, n));
+    if (val === undefined || val === null) return null;
     prod *= 1 + val / 100;
   }
   return arredondar((prod - 1) * 100, 4);
+}
+
+/**
+ * Média dos acumulados em 12m dos núcleos para cada mês pedido, com uma só
+ * requisição por série. Tudo-ou-nada por mês: se QUALQUER série não fechar os
+ * 12 meses, a média daquele mês é null. Uma média parcial é pior que a
+ * ausência do dado: com 4 de 5 séries o número publicado desloca em até
+ * 0,09 p.p. (ex.: 12m até mar/2026 = 4,39% com as 5 séries, 4,44% sem a DP)
+ * sem qualquer sinal de erro.
+ */
+async function mediasNucleos12m(meses) {
+  const ordenados = [...meses].sort();
+  const ini = mesMenos(ordenados[0], 11);
+  const fim = ordenados[ordenados.length - 1];
+  // NÃO paralelizar com Promise.all. Já foi tentado: disparar as séries de
+  // uma vez faz o SGS derrubar parte delas, e a nota sai sem o núcleo.
+  const series = [];
+  for (const nome of CONJUNTO_MEDIA) {
+    series.push(await serieMensal(NUCLEOS[nome], ini, fim));
+  }
+  const medias = new Map();
+  for (const mes of meses) {
+    const vals = series.map((s) => acum12m(s, mes));
+    if (vals.some((v) => v === null)) {
+      medias.set(mes, null);
+    } else {
+      const soma = vals.reduce((a, b) => a + b, 0);
+      medias.set(mes, arredondar(soma / vals.length, 4));
+    }
+  }
+  return medias;
 }
 
 // ---------------------------------------------------------------------------
 // API pública
 // ---------------------------------------------------------------------------
 
-/**
- * Média aritmética dos acumulados em 12m dos núcleos MS+EX0+DP+EX3+P55.
- *
- * Devolve null se QUALQUER uma das séries falhar. Uma média parcial é pior
- * que a ausência do dado: com 4 de 5 séries o número publicado desloca em até
- * 0,09 p.p. (ex.: 12m até mar/2026 = 4,39% com as 5 séries, 4,44% sem a DP)
- * sem qualquer sinal de erro. O bloco de núcleo é opcional na nota — omiti-lo
- * é seguro, publicá-lo errado não é.
- */
+/** Média aritmética dos acumulados em 12m de MS+EX0+DP+EX3+P55 (ou null). */
 export async function mediaNucleos12m(mesRef) {
-  // NÃO paralelizar com Promise.all. Já foi tentado: disparar as 5 séries de
-  // uma vez (12 requisições simultâneas somando os dois meses) faz o SGS
-  // derrubar parte delas, e a nota sai sem a comparação com o mês anterior.
-  // O ganho seria ~1s; o custo é perder um número. Mantém-se em série.
-  const vals = [];
-  for (const nome of CONJUNTO_MEDIA) {
-    const v = await acum12mSgs(NUCLEOS[nome], mesRef);
-    if (v === null) return null;
-    vals.push(v);
-  }
-  const soma = vals.reduce((a, b) => a + b, 0);
-  return arredondar(soma / vals.length, 4);
+  return (await mediasNucleos12m([mesRef])).get(mesRef);
 }
 
 /**
@@ -140,15 +154,16 @@ export async function mediaNucleos12m(mesRef) {
  */
 export async function enriquecer(resultado) {
   if (resultado.indicador === "IPCA") {
-    // Em série, pelo mesmo motivo descrito em mediaNucleos12m: o SGS não
+    // Em série, pelo mesmo motivo descrito em mediasNucleos12m: o SGS não
     // tolera a rajada e passa a devolver menos dados do que existe.
-    resultado.difusao = await buscarValorMes(SGS_DIFUSAO_IPCA, resultado.mes_ref);
-    resultado.difusao_anterior = await buscarValorMes(
-      SGS_DIFUSAO_IPCA,
-      resultado.mes_ant,
-    );
-    resultado.nucleo_12m = await mediaNucleos12m(resultado.mes_ref);
-    resultado.nucleo_12m_anterior = await mediaNucleos12m(resultado.mes_ant);
+    const ref = resultado.mes_ref;
+    const ant = resultado.mes_ant;
+    const difusao = await serieMensal(SGS_DIFUSAO_IPCA, ant, ref);
+    resultado.difusao = difusao.get(ref) ?? null;
+    resultado.difusao_anterior = difusao.get(ant) ?? null;
+    const nucleos = await mediasNucleos12m([ref, ant]);
+    resultado.nucleo_12m = nucleos.get(ref);
+    resultado.nucleo_12m_anterior = nucleos.get(ant);
   } else {
     resultado.difusao = calcularDifusao(resultado.subitens, 4);
     resultado.difusao_anterior = null;

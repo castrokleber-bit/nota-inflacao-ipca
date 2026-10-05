@@ -6,6 +6,8 @@ Nenhum token do texto é gerado por IA; cada campo rastreia a um
 valor retornado pela API (ResultadoInflacao).
 """
 import math
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Optional
 
@@ -36,26 +38,25 @@ class ConfigNota:
 # Tabelas e auxiliares de formatação
 # ---------------------------------------------------------------------------
 
-_MESES = {
-    "01": "janeiro", "02": "fevereiro", "03": "marco",   "04": "abril",
-    "05": "maio",    "06": "junho",     "07": "julho",   "08": "agosto",
-    "09": "setembro","10": "outubro",   "11": "novembro","12": "dezembro",
-}
-
 _MESES_ACENTUADOS = {
     "01": "janeiro", "02": "fevereiro", "03": "março",   "04": "abril",
     "05": "maio",    "06": "junho",     "07": "julho",   "08": "agosto",
     "09": "setembro","10": "outubro",   "11": "novembro","12": "dezembro",
 }
 
-# Prefixos de itens femininos — usados em "a alta da/do <item>"
-_FEMININAS: set[str] = {
-    "energia", "gasolina", "gasolina comum", "gasolina aditivada",
-    "carne", "farinha", "batata", "batata-inglesa",
-    "agua", "cerveja", "manteiga", "margarina",
-    "fruta", "maca", "banana", "uva", "alface",
-    "cenoura", "cebola", "ervilha", "abobrinha",
-    "televisao", "geladeira", "passagem",
+# Exceções à regra de terminação de _artigo_de, pela primeira palavra inteira
+# (sem acento). Comparação exata: o antigo teste por prefixo fazia "maca"
+# capturar "macarrão" e publicava "da macarrão".
+_ARTIGO_EXCECOES: dict[str, str] = {
+    # femininos que não terminam em -a/-ção/-são/-dade/-gem
+    "alface": "f", "ave": "f", "carne": "f", "couve": "f", "creche": "f",
+    "gripe": "f", "higiene": "f", "internet": "f", "lingerie": "f",
+    "maionese": "f", "manicure": "f", "mao": "f", "tv": "f",
+    # masculinos terminados em -a
+    "cha": "m", "cinema": "m", "dentista": "m", "fisioterapeuta": "m",
+    "fuba": "m", "sutia": "m",
+    # singulares terminados em -s (não são plural)
+    "gas": "m", "lapis": "m", "onibus": "m", "tenis": "m",
 }
 
 
@@ -91,17 +92,17 @@ def _artigo_de(nome: str) -> str:
     O nucleo semantico do nome (que define genero/numero) e a primeira
     palavra, nao a ultima — ex.: "alimentação no domicílio" (fem.) ou
     "tubérculos, raízes e legumes" (masc. plural)."""
-    import re
-    import unicodedata
     nl = unicodedata.normalize("NFD", nome.lower())
     nl_ascii = "".join(c for c in nl if unicodedata.category(c) != "Mn")
     primeira = re.split(r"[ ,(]", nl_ascii.strip(), maxsplit=1)[0]
+    if primeira in _ARTIGO_EXCECOES:
+        return "da" if _ARTIGO_EXCECOES[primeira] == "f" else "do"
     plural = primeira.endswith("s") and len(primeira) > 2
     singular = primeira[:-1] if plural else primeira
-    feminino = (
-        any(primeira.startswith(f) for f in _FEMININAS)
-        or singular.endswith(("a", "cao", "sao", "dade", "gem"))
-    )
+    if singular in _ARTIGO_EXCECOES:
+        feminino = _ARTIGO_EXCECOES[singular] == "f"
+    else:
+        feminino = singular.endswith(("a", "cao", "sao", "dade", "gem"))
     if feminino:
         return "das" if plural else "da"
     return "dos" if plural else "do"
@@ -111,18 +112,35 @@ def _direcao(v: float, alta: str = "alta", queda: str = "queda") -> str:
     return alta if v >= 0 else queda
 
 
-def _avanco_recuo(v: float) -> str:
-    return "avanço" if v >= 0 else "recuo"
+def _unidades(v: float, decimais: int = 2) -> int:
+    """O número como é exibido, em unidades da última casa: 4,39 -> 439.
+    Toda comparação que vira texto usa isto, e não o float cru — senão
+    4,391 contra 4,389 publica "4,39%, acima dos 4,39%"."""
+    return int(_fmt(v, decimais).replace(",", ""))
 
 
-def _acima_abaixo(atual: float, anterior: float) -> str:
-    return "acima" if atual > anterior else "abaixo"
+def _movimento(v: float, alta: str = "alta", queda: str = "queda") -> str:
+    """'alta de 0,67%' / 'queda de 0,32%' / 'estabilidade (0,00%)'.
+    A palavra já diz o sentido, então o número sai sem sinal: nada de
+    "queda de -0,32%"."""
+    if _unidades(v) == 0:
+        return "estabilidade (0,00%)"
+    return f"{_direcao(v, alta, queda)} de {_fmt(abs(v))}%"
+
+
+def _comparacao(atual: float, anterior: float, decimais: int = 2) -> str:
+    """'acima' / 'abaixo' / 'igual', comparando os números como são exibidos."""
+    a, b = _unidades(atual, decimais), _unidades(anterior, decimais)
+    if a == b:
+        return "igual"
+    return "acima" if a > b else "abaixo"
 
 
 def _em_linha_ou_relativo(v: float, ref: float, tol: float = 0.05) -> str:
-    if abs(v - ref) <= tol:
+    dif = _unidades(v) - _unidades(ref)
+    if abs(dif) <= _unidades(tol):
         return "em linha com"
-    return "acima de" if v > ref else "abaixo de"
+    return "acima de" if dif > 0 else "abaixo de"
 
 
 def _pp_longo(v: float) -> str:
@@ -149,6 +167,11 @@ def _pp(v: float) -> str:
 def _idx_var(mes_ref: str) -> int:
     """Retorna índice 0-3 com base no trimestre de mes_ref (AAAAMM)."""
     return (int(mes_ref[4:6]) - 1) // 3 % 4
+
+
+# Variante cujas frases de queda não pressupõem um parágrafo de alta antes
+# ("Entre os subgrupos, a queda..."): usada quando nenhum grupo subiu.
+_IDX_NEUTRO = 2
 
 
 # Abertura do parágrafo de alta (grupos de inflação — 1º grupo)
@@ -255,21 +278,18 @@ def _mesmo_mes_ano_anterior(mes_ref: str) -> str:
 
 
 def bloco_resultado(r: ResultadoInflacao, cfg: ConfigNota) -> str:
-    dir_mensal = _direcao(r.variacao_mensal)
-    avanco = _avanco_recuo(r.variacao_mensal_anterior)
     mes_ano_ant = _mesmo_mes_ano_anterior(r.mes_ref)
 
     # Comparação com mês anterior
     comp_anterior = (
-        f"após {avanco} de {_fmt(r.variacao_mensal_anterior)}% "
+        f"após {_movimento(r.variacao_mensal_anterior, 'avanço', 'recuo')} "
         f"em {_mes(r.mes_ant)}"
     )
 
     # Comparação com mesmo mês do ano anterior (quando disponível)
     if r.variacao_mesmo_mes_ano_anterior is not None:
-        dir_ano_ant = _direcao(r.variacao_mesmo_mes_ano_anterior)
         comp_ano_ant = (
-            f"e {dir_ano_ant} de {_fmt(r.variacao_mesmo_mes_ano_anterior)}% "
+            f"e {_movimento(r.variacao_mesmo_mes_ano_anterior)} "
             f"em {_mes(mes_ano_ant)} de {_ano(mes_ano_ant)}"
         )
         comparacoes = f"{comp_anterior} {comp_ano_ant}."
@@ -278,7 +298,7 @@ def bloco_resultado(r: ResultadoInflacao, cfg: ConfigNota) -> str:
 
     texto = (
         f"{cfg.emoji_resultado} O {r.indicador} registrou "
-        f"*{dir_mensal} de {_fmt(r.variacao_mensal)}%* "
+        f"*{_movimento(r.variacao_mensal)}* "
         f"em {_mes(r.mes_ref)} de {_ano(r.mes_ref)}, "
         f"{comparacoes}"
     )
@@ -296,14 +316,38 @@ def bloco_resultado(r: ResultadoInflacao, cfg: ConfigNota) -> str:
 def bloco_explicacao(r: ResultadoInflacao, cfg: ConfigNota) -> str:
     """Paragrafos dos grupos + subitens de destaque; pode conter \\n\\n interno.
     Ordem: inflação (grupos → subitem) → deflação (grupos → subitem).
-    Frases variam por trimestre para evitar repetição entre divulgações."""
+    Frases variam por trimestre para evitar repetição entre divulgações.
+
+    Sem grupo em alta relevante (mês de deflação), a queda abre a explicação
+    com as frases de destaque principal, e os parágrafos de queda seguintes
+    perdem o conector de contraste ("Em sentido contrário"), que não teria a
+    que se opor."""
+    idx = _idx_var(r.mes_ref)
     grupos = grupos_relevantes(
         r.grupos, top_n=cfg.top_n_grupos, threshold=cfg.threshold_grupos
     )
-    if not grupos:
-        return ""
+    gqs = grupos_queda(r.grupos, top_n=cfg.top_n_queda, threshold=cfg.threshold_queda)
+    partes: list[str] = []
 
-    idx = _idx_var(r.mes_ref)
+    if grupos:
+        partes.append(_paragrafo_grupos(r, grupos, cfg.emoji_explicacao, idx))
+        partes += _paragrafos_alta(r, cfg, idx)
+        if gqs:
+            partes.append(_paragrafo_queda_contraste(gqs, cfg, idx))
+        idx_queda = idx
+    else:
+        if gqs:
+            partes.append(_paragrafo_grupos(r, gqs, cfg.emoji_queda, idx))
+        idx_queda = _IDX_NEUTRO
+
+    partes += _paragrafos_queda(r, cfg, idx_queda)
+    return "\n\n".join(partes)
+
+
+def _paragrafo_grupos(
+    r: ResultadoInflacao, grupos: list[ItemInflacao], emoji: str, idx: int
+) -> str:
+    """Abertura da explicação: o grupo principal e até dois seguintes."""
     g1 = grupos[0]
     g1n = _strip(g1.nome)
     dir_g1 = _direcao(g1.variacao)
@@ -312,7 +356,7 @@ def bloco_explicacao(r: ResultadoInflacao, cfg: ConfigNota) -> str:
         ind=r.indicador, mes=_mes(r.mes_ref), dir=dir_g1, nome=g1n
     )
     texto = (
-        f"{cfg.emoji_explicacao} {abertura}, "
+        f"{emoji} {abertura}, "
         f"com variação de {_fmt(g1.variacao)}% e impacto de "
         f"{_pp_longo(g1.impacto)} no índice do mês."
     )
@@ -337,8 +381,12 @@ def bloco_explicacao(r: ResultadoInflacao, cfg: ConfigNota) -> str:
             f"com variação de {_fmt(g3.variacao)}% "
             f"e impacto de {_pp(g3.impacto)}"
         )
+    return texto
 
-    partes = [texto]
+
+def _paragrafos_alta(r: ResultadoInflacao, cfg: ConfigNota, idx: int) -> list[str]:
+    """Subgrupo, item e subitem de maior impacto positivo."""
+    partes = []
 
     # --- INFLAÇÃO: subgrupo de maior impacto (nivel 2) ---
     subgrupo = top_subitem(r.subitens, nivel=2)
@@ -382,28 +430,34 @@ def bloco_explicacao(r: ResultadoInflacao, cfg: ConfigNota) -> str:
             )
         )
 
-    # --- DEFLAÇÃO: grupos com maior queda ---
-    gqs = grupos_queda(r.grupos, top_n=cfg.top_n_queda, threshold=cfg.threshold_queda)
-    if gqs:
-        if len(gqs) == 1:
-            gq = gqs[0]
-            gqn = _strip(gq.nome)
-            abertura_q = _ABR_QUEDA_1[idx].format(nome=gqn)
-            texto_queda = (
-                f"{cfg.emoji_queda} {abertura_q}, "
-                f"com variação de {_fmt(gq.variacao)}% e impacto de "
-                f"{_pp(gq.impacto)} no índice do mês."
-            )
-        else:
-            gq1, gq2 = gqs[0], gqs[1]
-            texto_queda = (
-                f"{cfg.emoji_queda} "
-                + _ABR_QUEDA_2[idx].format(
-                    n1=_strip(gq1.nome), v1=_fmt(gq1.variacao), i1=_pp(gq1.impacto),
-                    n2=_strip(gq2.nome), v2=_fmt(gq2.variacao), i2=_pp(gq2.impacto),
-                )
-            )
-        partes.append(texto_queda)
+    return partes
+
+
+def _paragrafo_queda_contraste(
+    gqs: list[ItemInflacao], cfg: ConfigNota, idx: int
+) -> str:
+    """Grupos em queda, em contraste com o parágrafo de alta que os precede."""
+    if len(gqs) == 1:
+        gq = gqs[0]
+        abertura_q = _ABR_QUEDA_1[idx].format(nome=_strip(gq.nome))
+        return (
+            f"{cfg.emoji_queda} {abertura_q}, "
+            f"com variação de {_fmt(gq.variacao)}% e impacto de "
+            f"{_pp(gq.impacto)} no índice do mês."
+        )
+    gq1, gq2 = gqs[0], gqs[1]
+    return (
+        f"{cfg.emoji_queda} "
+        + _ABR_QUEDA_2[idx].format(
+            n1=_strip(gq1.nome), v1=_fmt(gq1.variacao), i1=_pp(gq1.impacto),
+            n2=_strip(gq2.nome), v2=_fmt(gq2.variacao), i2=_pp(gq2.impacto),
+        )
+    )
+
+
+def _paragrafos_queda(r: ResultadoInflacao, cfg: ConfigNota, idx: int) -> list[str]:
+    """Subgrupo, item e subitem de maior deflação."""
+    partes = []
 
     # --- DEFLAÇÃO: subgrupo de maior queda (nivel 2) ---
     subgrupo_q = top_subitem_queda(r.subitens, nivel=2, threshold=cfg.threshold_queda)
@@ -444,15 +498,17 @@ def bloco_explicacao(r: ResultadoInflacao, cfg: ConfigNota) -> str:
             )
         )
 
-    return "\n\n".join(partes)
+    return partes
 
 
 def bloco_acumulado(r: ResultadoInflacao, cfg: ConfigNota) -> str:
-    rel = _acima_abaixo(r.acum_12m, r.acum_12m_anterior)
+    rel = {"acima": "acima dos", "abaixo": "abaixo dos", "igual": "igual aos"}[
+        _comparacao(r.acum_12m, r.acum_12m_anterior)
+    ]
     return (
         f"{cfg.emoji_acumulado} O *{r.indicador} acumulado em 12 meses* "
         f"até {_mes(r.mes_ref)} ficou em *{_fmt(r.acum_12m)}%*, "
-        f"{rel} dos {_fmt(r.acum_12m_anterior)}% "
+        f"{rel} {_fmt(r.acum_12m_anterior)}% "
         f"registrados nos 12 meses encerrados em {_mes(r.mes_ant)}."
     )
 
@@ -477,9 +533,13 @@ def bloco_nucleo(r: ResultadoInflacao, cfg: ConfigNota) -> Optional[str]:
     if r.nucleo_12m_anterior is None:
         return base + "."
 
-    rel = _acima_abaixo(r.nucleo_12m, r.nucleo_12m_anterior)
+    rel = {
+        "acima": "ligeiramente acima dos",
+        "abaixo": "ligeiramente abaixo dos",
+        "igual": "igual aos",
+    }[_comparacao(r.nucleo_12m, r.nucleo_12m_anterior)]
     return (
-        f"{base}, ligeiramente {rel} dos "
+        f"{base}, {rel} "
         f"{_fmt(r.nucleo_12m_anterior)}% no acumulado até {_mes(r.mes_ant)}."
     )
 
@@ -489,12 +549,14 @@ def bloco_difusao(r: ResultadoInflacao, cfg: ConfigNota) -> Optional[str]:
         return None
     dif = _fmt(r.difusao, decimais=1)
     if r.difusao_anterior is not None:
-        rel = _acima_abaixo(r.difusao, r.difusao_anterior)
+        rel = {"acima": "acima do", "abaixo": "abaixo do", "igual": "igual ao"}[
+            _comparacao(r.difusao, r.difusao_anterior, decimais=1)
+        ]
         ant = _fmt(r.difusao_anterior, decimais=1)
         return (
             f"{cfg.emoji_difusao} O *índice de difusão*, que mede a disseminação "
             f"das altas de preços entre os itens que compõem o {r.indicador}, "
-            f"ficou em *{dif}%*, {rel} do registrado em "
+            f"ficou em *{dif}%*, {rel} registrado em "
             f"{_mes(r.mes_ant)} ({ant}%)."
         )
     return (

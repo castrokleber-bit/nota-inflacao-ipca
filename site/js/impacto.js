@@ -12,9 +12,13 @@ export function calcularImpacto(variacao, peso) {
   return arredondar((peso * variacao) / 100, 4);
 }
 
-/** Até topN grupos com impacto absoluto acima de threshold p.p. */
+/**
+ * Até topN grupos com impacto positivo de pelo menos threshold p.p.
+ * Só alta: um grupo em queda aqui seria anunciado como "destaque" no
+ * parágrafo de alta e citado de novo no de deflação (gruposQueda).
+ */
 export function gruposRelevantes(grupos, topN = 3, threshold = 0.05) {
-  return grupos.slice(0, topN).filter((g) => Math.abs(g.impacto) >= threshold);
+  return grupos.slice(0, topN).filter((g) => g.impacto >= threshold);
 }
 
 /** Item de maior impacto positivo no nível pedido, ou null. Entrada já ordenada desc. */

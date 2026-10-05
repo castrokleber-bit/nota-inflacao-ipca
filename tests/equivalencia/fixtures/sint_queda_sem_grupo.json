@@ -1,0 +1,46 @@
+{
+  "indicador": "IPCA",
+  "mes_ref": "202604",
+  "mes_ant": "202603",
+  "variacao_mensal": -0.02,
+  "variacao_mensal_anterior": 0.88,
+  "acum_12m": 4.39,
+  "acum_12m_anterior": 4.14,
+  "grupos": [
+    {
+      "cat_id": 7170,
+      "nome": "1.Alimentação e bebidas",
+      "nivel": 1,
+      "variacao": 0.1,
+      "peso": 21.45,
+      "fonte": "sintetico"
+    },
+    {
+      "cat_id": 7445,
+      "nome": "2.Habitação",
+      "nivel": 1,
+      "variacao": -0.2,
+      "peso": 15.2,
+      "fonte": "sintetico"
+    }
+  ],
+  "subitens": [
+    {
+      "cat_id": 1103,
+      "nome": "1103.gasolina",
+      "nivel": 4,
+      "variacao": -2.0,
+      "peso": 5.28,
+      "fonte": "sintetico"
+    }
+  ],
+  "difusao": null,
+  "difusao_anterior": null,
+  "nucleo_12m": null,
+  "nucleo_12m_anterior": null,
+  "projecao_focus": null,
+  "url_ibge": null,
+  "variacao_mesmo_mes_ano_anterior": null,
+  "fonte_variacao": "",
+  "fonte_acum": ""
+}

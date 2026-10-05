@@ -129,7 +129,7 @@ notas de referência em `tests/golden/`:
 - **IPCA abril/2026** (0,67%; acum. 12m 4,39%; núcleo 4,38%; difusão 65,3%)
 - **IPCA-15 maio/2026** (0,62%; acum. 12m 4,64%; difusão 65,1%)
 
-mais os 16 casos sintéticos de `tests/equivalencia/casos_sinteticos.py`.
+mais os 20 casos sintéticos de `tests/equivalencia/casos_sinteticos.py`.
 **Não avançar sem fechar o gate.**
 
 Se um gate de rede falhar, distinga a causa antes de agir: código quebrado ou

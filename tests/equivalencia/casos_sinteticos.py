@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fontes.modelo import ItemInflacao, ResultadoInflacao  # noqa: E402
 from nucleo.montador import compor_nota  # noqa: E402
-from dump_python import serializar  # noqa: E402
+from fontes.modelo import serializar  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -207,6 +207,56 @@ CASOS["sint_empate_impacto"] = resultado(
         item(2002, "2002.segundo empatado", 4, 2.00, 5.00),
         item(2003, "2003.terceiro empatado", 4, 1.00, 10.00),
     ],
+)
+
+# 15. Variação que arredonda a zero e comparações que empatam no número
+#     exibido (4,391 x 4,389; 65,32 x 65,28): "estabilidade" e "igual",
+#     nunca "4,39%, acima dos 4,39%".
+CASOS["sint_estabilidade"] = resultado(
+    variacao_mensal=0.001,
+    variacao_mensal_anterior=-0.004,
+    variacao_mesmo_mes_ano_anterior=0.0,
+    acum_12m=4.391,
+    acum_12m_anterior=4.389,
+    nucleo_12m=4.3801,
+    nucleo_12m_anterior=4.3799,
+    difusao=65.32,
+    difusao_anterior=65.28,
+    grupos=[item(7170, "1.Alimentação e bebidas", 1, 1.34, 21.45)],
+    subitens=[item(1103, "1103.gasolina", 4, 1.86, 5.28)],
+)
+
+# 16. Focus exatamente 0,05 p.p. abaixo: em float, 0,67 - 0,62 dá
+#     0,05000000000000004 e caía em "acima de".
+CASOS["sint_focus_borda"] = resultado(
+    projecao_focus=0.62,
+    grupos=[item(7170, "1.Alimentação e bebidas", 1, 1.34, 21.45)],
+    subitens=[item(1103, "1103.gasolina", 4, 1.86, 5.28)],
+)
+
+# 17. Exceções do artigo: singular em -s, masculino em -a, feminino em -e e
+#     prefixo enganoso ("maca" em "macarrão").
+CASOS["sint_artigos"] = resultado(
+    grupos=[item(7170, "1.Alimentação e bebidas", 1, 1.34, 21.45)],
+    subitens=[
+        item(3001, "31.Higiene pessoal", 2, 1.20, 3.00),
+        item(3002, "3101.Macarrão", 3, 4.00, 1.50),
+        item(3003, "3101001.Gás de botijão", 4, 3.00, 1.10),
+        item(3004, "32.Aves e ovos", 2, -2.00, 3.00),
+        item(3005, "3201.Cinema, teatro e concertos", 3, -5.00, 1.20),
+        item(3006, "3201001.Ônibus urbano", 4, -4.00, 2.00),
+    ],
+)
+
+# 18. Nenhum grupo passa o limite, nem em alta nem em queda: os parágrafos
+#     de queda dos subitens ficam, sem conector de contraste.
+CASOS["sint_queda_sem_grupo"] = resultado(
+    variacao_mensal=-0.02,
+    grupos=[
+        item(7170, "1.Alimentação e bebidas", 1, 0.10, 21.45),
+        item(7445, "2.Habitação", 1, -0.20, 15.20),
+    ],
+    subitens=[item(1103, "1103.gasolina", 4, -2.00, 5.28)],
 )
 
 

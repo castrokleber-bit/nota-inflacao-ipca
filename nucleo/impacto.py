@@ -19,10 +19,13 @@ def grupos_relevantes(
     threshold: float = 0.05,
 ) -> list[ItemInflacao]:
     """
-    Retorna até top_n grupos com maior impacto absoluto acima de threshold p.p.
+    Retorna até top_n grupos com impacto positivo de pelo menos threshold p.p.
     A entrada deve estar ordenada por impacto desc (padrão de ibge.buscar_resultado).
+
+    Só alta: um grupo em queda aqui seria anunciado como "destaque" no
+    parágrafo de alta e citado de novo no de deflação (grupos_queda).
     """
-    return [g for g in grupos[:top_n] if abs(g.impacto) >= threshold]
+    return [g for g in grupos[:top_n] if g.impacto >= threshold]
 
 
 def top_subitem(
@@ -30,8 +33,8 @@ def top_subitem(
     nivel: int = 4,
 ) -> ItemInflacao | None:
     """
-    Retorna o subitem de maior impacto positivo no nível solicitado, ou None se vazio.
-    nivel=4 → subitem próprio; nivel=2 → subgrupo (fallback se não houver nivel 4).
+    Retorna o item de maior impacto positivo no nível solicitado, ou None.
+    nivel: 2 = subgrupo, 3 = item, 4 = subitem.
     """
     candidatos = [s for s in subitens if s.nivel == nivel and s.impacto > 0]
     return candidatos[0] if candidatos else None

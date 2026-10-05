@@ -62,20 +62,23 @@ function parseFloatBr(s) {
   return Number.isNaN(v) ? null : v;
 }
 
+
 /**
- * Chama a API de Agregados e devolve Map<varId, Map<catId, {nome, valor}>>.
+ * Chama a API de Agregados para um ou mais períodos de uma vez e devolve
+ * Map<periodo, Map<varId, Map<catId, {nome, valor}>>>.
  *
  * Usa Map, e não objeto literal, para preservar a ordem da resposta: o Python
  * itera o dict na ordem de inserção e empates de impacto são resolvidos por
  * ela. Chaves numéricas num objeto JS seriam reordenadas para ordem crescente
  * e mudariam qual item a nota cita.
  */
-async function fetchAgregado(tabela, periodo, variaveis, cats) {
+async function fetchAgregado(tabela, periodos, variaveis, cats) {
   const varsStr = variaveis.join("|");
   const catsStr = cats === "all" ? "all" : cats.join(",");
   const url =
-    `${BASE}/${tabela}/periodos/${periodo}/variaveis/${varsStr}` +
+    `${BASE}/${tabela}/periodos/${periodos.join("|")}/variaveis/${varsStr}` +
     `?localidades=N1[all]&classificacao=315[${catsStr}]`;
+  const rotulo = `${tabela}/${periodos.join(",")}`;
 
   // Timeout obrigatório (o httpx.get do Python usa timeout=60). Sem ele, uma
   // requisição pendurada deixa a interface em "Gerando…" para sempre, sem erro
@@ -85,19 +88,19 @@ async function fetchAgregado(tabela, periodo, variaveis, cats) {
     resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
   } catch (e) {
     if (e.name === "TimeoutError" || e.name === "AbortError") {
-      throw new Error(`IBGE nao respondeu em 60s (${tabela}/${periodo})`);
+      throw new Error(`IBGE nao respondeu em 60s (${rotulo})`);
     }
     throw e;
   }
   if (!resp.ok) {
-    throw new Error(`IBGE respondeu ${resp.status} para ${tabela}/${periodo}`);
+    throw new Error(`IBGE respondeu ${resp.status} para ${rotulo}`);
   }
   const data = await resp.json();
 
-  const result = new Map();
+  const result = new Map(periodos.map((p) => [p, new Map()]));
   for (const bloco of data) {
     const varId = parseInt(bloco.id, 10);
-    const porCat = new Map();
+    for (const p of periodos) result.get(p).set(varId, new Map());
     for (const entrada of bloco.resultados ?? []) {
       const catD = entrada.classificacoes[0].categoria;
       const catIdStr = Object.keys(catD)[0];
@@ -105,10 +108,13 @@ async function fetchAgregado(tabela, periodo, variaveis, cats) {
       const catNome = catD[catIdStr];
       const series = entrada.series ?? [];
       if (series.length === 0) continue;
-      const valor = parseFloatBr(series[0].serie[periodo]);
-      if (valor !== null) porCat.set(catId, { nome: catNome, valor });
+      for (const p of periodos) {
+        const valor = parseFloatBr(series[0].serie[p]);
+        if (valor !== null) {
+          result.get(p).get(varId).set(catId, { nome: catNome, valor });
+        }
+      }
     }
-    result.set(varId, porCat);
   }
   return result;
 }
@@ -122,6 +128,55 @@ function exigir(mapa, varId, catId, contexto) {
   return entrada;
 }
 
+/**
+ * Grupos (nível 1, na ordem de CATS_GRUPO) e itens de nível >= 2 (na ordem da
+ * resposta), ambos ordenados por impacto desc. Só entra quem tem variação e
+ * peso.
+ */
+function itens(d, vm, vp, fonte) {
+  const porVar = d.get(vm) ?? new Map();
+  const porPeso = d.get(vp) ?? new Map();
+
+  const grupos = [];
+  for (const catId of CATS_GRUPO) {
+    const entryVm = porVar.get(catId);
+    const entryVp = porPeso.get(catId);
+    if (entryVm && entryVp) {
+      grupos.push(
+        new ItemInflacao({
+          cat_id: catId,
+          nome: entryVm.nome,
+          nivel: 1,
+          variacao: entryVm.valor,
+          peso: entryVp.valor,
+          fonte,
+        }),
+      );
+    }
+  }
+  grupos.sort((a, b) => b.impacto - a.impacto);
+
+  const subitens = [];
+  for (const [catId, entrada] of porVar) {
+    const nivel = nivelFromNome(entrada.nome);
+    if (nivel < 2) continue;
+    const entryVp = porPeso.get(catId);
+    if (!entryVp) continue;
+    subitens.push(
+      new ItemInflacao({
+        cat_id: catId,
+        nome: entrada.nome,
+        nivel,
+        variacao: entrada.valor,
+        peso: entryVp.valor,
+        fonte,
+      }),
+    );
+  }
+  subitens.sort((a, b) => b.impacto - a.impacto);
+  return [grupos, subitens];
+}
+
 // ---------------------------------------------------------------------------
 // API pública
 // ---------------------------------------------------------------------------
@@ -129,6 +184,11 @@ function exigir(mapa, varId, catId, contexto) {
 /**
  * Busca o resultado do IPCA ou IPCA-15 para o período (AAAAMM) e devolve um
  * ResultadoInflacao com grupos e subitens ordenados por impacto.
+ *
+ * Três requisições, em paralelo: índice geral do mês e do anterior (uma só,
+ * dois períodos), mesmo mês do ano anterior (opcional, à parte porque pode
+ * não existir na tabela) e todas as categorias do mês, de onde saem grupos e
+ * subitens.
  *
  * difusao, nucleo e projeções ficam null; preenchidos por bcb.enriquecer().
  */
@@ -140,70 +200,33 @@ export async function buscarResultado(indicador, mesRef) {
   const va12 = conf.var_acum12m;
   const vp = conf.var_peso;
   const mesAnt = mesAnterior(mesRef);
+  const mesAnoAnt = mesmoMesAnoAnterior(mesRef);
   const fonte = `IBGE SIDRA tabela ${tab}`;
 
-  // 1. Índice geral — mês de referência
-  const dCur = await fetchAgregado(tab, mesRef, [vm, va12], [CAT_GERAL]);
+  const [dGeral, variacaoMesmoMesAnoAnterior, dAll] = await Promise.all([
+    // 1. Índice geral — mês de referência e mês anterior
+    fetchAgregado(tab, [mesAnt, mesRef], [vm, va12], [CAT_GERAL]),
+    // 2. Mesmo mês do ano anterior (comparação interanual no blocoResultado)
+    fetchAgregado(tab, [mesAnoAnt], [vm], [CAT_GERAL])
+      .then((d) => exigir(d.get(mesAnoAnt), vm, CAT_GERAL, mesAnoAnt).valor)
+      .catch(() => null),
+    // 3. Todas as categorias — variação + peso, mês de referência
+    fetchAgregado(tab, [mesRef], [vm, vp], "all"),
+  ]);
+
+  const dCur = dGeral.get(mesRef);
+  const dAnt = dGeral.get(mesAnt);
   const variacaoMensal = exigir(dCur, vm, CAT_GERAL, `${indicador} ${mesRef}`).valor;
   const acum12m = exigir(dCur, va12, CAT_GERAL, `${indicador} ${mesRef}`).valor;
-
-  // 2. Índice geral — mês anterior
-  const dAnt = await fetchAgregado(tab, mesAnt, [vm, va12], [CAT_GERAL]);
   const variacaoMensalAnterior = exigir(dAnt, vm, CAT_GERAL, `${indicador} ${mesAnt}`).valor;
   const acum12mAnterior = exigir(dAnt, va12, CAT_GERAL, `${indicador} ${mesAnt}`).valor;
 
-  // 2b. Mesmo mês do ano anterior (comparação interanual no blocoResultado)
-  const mesAnoAnt = mesmoMesAnoAnterior(mesRef);
-  let variacaoMesmoMesAnoAnterior = null;
-  try {
-    const dAnoAnt = await fetchAgregado(tab, mesAnoAnt, [vm], [CAT_GERAL]);
-    variacaoMesmoMesAnoAnterior = exigir(dAnoAnt, vm, CAT_GERAL, mesAnoAnt).valor;
-  } catch {
-    variacaoMesmoMesAnoAnterior = null;
-  }
-
-  // 3. Grupos — variação + peso, mês de referência
-  const dG = await fetchAgregado(tab, mesRef, [vm, vp], CATS_GRUPO);
-  const grupos = [];
-  for (const catId of CATS_GRUPO) {
-    const entryVm = dG.get(vm)?.get(catId);
-    const entryVp = dG.get(vp)?.get(catId);
-    if (entryVm && entryVp) {
-      grupos.push(
-        new ItemInflacao({
-          cat_id: catId,
-          nome: entryVm.nome,
-          nivel: 1,
-          variacao: entryVm.valor,
-          peso: entryVp.valor,
-          fonte: `${fonte} var ${vm},${vp} periodo ${mesRef}`,
-        }),
-      );
-    }
-  }
-  grupos.sort((a, b) => b.impacto - a.impacto);
-
-  // 4. Todos os itens (nível >= 2) — variação + peso, mês de referência
-  //    Usado para encontrar o subitem de maior impacto individual
-  const dAll = await fetchAgregado(tab, mesRef, [vm, vp], "all");
-  const subitens = [];
-  for (const [catId, entrada] of dAll.get(vm) ?? new Map()) {
-    const nivel = nivelFromNome(entrada.nome);
-    if (nivel < 2) continue;
-    const entryVp = dAll.get(vp)?.get(catId);
-    if (!entryVp) continue;
-    subitens.push(
-      new ItemInflacao({
-        cat_id: catId,
-        nome: entrada.nome,
-        nivel,
-        variacao: entrada.valor,
-        peso: entryVp.valor,
-        fonte: `${fonte} var ${vm},${vp} periodo ${mesRef}`,
-      }),
-    );
-  }
-  subitens.sort((a, b) => b.impacto - a.impacto);
+  const [grupos, subitens] = itens(
+    dAll.get(mesRef),
+    vm,
+    vp,
+    `${fonte} var ${vm},${vp} periodo ${mesRef}`,
+  );
 
   return new ResultadoInflacao({
     indicador,

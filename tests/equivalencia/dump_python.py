@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from fontes.ibge import buscar_resultado  # noqa: E402
 from fontes.bcb import enriquecer  # noqa: E402
 from nucleo.montador import compor_nota  # noqa: E402
+from fontes.modelo import serializar  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -31,41 +32,6 @@ CASOS = [
     ("ipca_202604", "IPCA", "202604"),
     ("ipca15_202605", "IPCA-15", "202605"),
 ]
-
-
-def _item(i) -> dict:
-    return {
-        "cat_id": i.cat_id,
-        "nome": i.nome,
-        "nivel": i.nivel,
-        "variacao": i.variacao,
-        "peso": i.peso,
-        "fonte": i.fonte,
-    }
-
-
-def serializar(r) -> dict:
-    """Serializa preservando a ORDEM das listas — ela decide desempates."""
-    return {
-        "indicador": r.indicador,
-        "mes_ref": r.mes_ref,
-        "mes_ant": r.mes_ant,
-        "variacao_mensal": r.variacao_mensal,
-        "variacao_mensal_anterior": r.variacao_mensal_anterior,
-        "acum_12m": r.acum_12m,
-        "acum_12m_anterior": r.acum_12m_anterior,
-        "grupos": [_item(i) for i in r.grupos],
-        "subitens": [_item(i) for i in r.subitens],
-        "difusao": r.difusao,
-        "difusao_anterior": r.difusao_anterior,
-        "nucleo_12m": r.nucleo_12m,
-        "nucleo_12m_anterior": r.nucleo_12m_anterior,
-        "projecao_focus": r.projecao_focus,
-        "url_ibge": r.url_ibge,
-        "variacao_mesmo_mes_ano_anterior": r.variacao_mesmo_mes_ano_anterior,
-        "fonte_variacao": r.fonte_variacao,
-        "fonte_acum": r.fonte_acum,
-    }
 
 
 def main() -> int:

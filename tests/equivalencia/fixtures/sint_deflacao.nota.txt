@@ -1,15 +1,13 @@
 🚨 *IPCA ABRIL/2026*
 
-🚩 O IPCA registrou *queda de -0,32%* em abril de 2026, após recuo de -0,15% em março e queda de -0,08% em abril de 2025.
+🚩 O IPCA registrou *queda de 0,32%* em abril de 2026, após recuo de 0,15% em março e queda de 0,08% em abril de 2025.
 
-🔴 O resultado de abril *reflete a queda do grupo Habitação*, com variação de -0,90% e impacto de -0,14 ponto percentual (p.p.) no índice do mês. Em seguida, destaca-se o grupo Alimentação e bebidas, com variação de -1,34% e impacto de -0,29 p.p.
+🟢 O resultado de abril *reflete a queda do grupo Alimentação e bebidas*, com variação de -1,34% e impacto de -0,29 ponto percentual (p.p.) no índice do mês.
 
-🟢 Em sentido contrário, destaca-se a queda do grupo *Alimentação e bebidas*, com variação de -1,34% e impacto de -0,29 p.p. no índice do mês.
+🟢 Entre os subgrupos, a queda da *alimentação no domicílio* (-1,80% e impacto de -0,19 p.p.) exerceu a maior contenção sobre o índice.
 
-🟢 Em sentido contrário, destaca-se a queda da *alimentação no domicílio* (-1,80% e impacto de -0,19 p.p.), subgrupo de maior deflação no índice do mês.
+🟢 Entre os itens, a queda dos *tubérculos, raízes e legumes* (-6,40% e impacto de -0,05 p.p.) exerceu a maior contenção sobre o índice.
 
-🟢 Em sentido contrário, destaca-se a queda dos *tubérculos, raízes e legumes* (-6,40% e impacto de -0,05 p.p.), item de maior deflação no índice do mês.
-
-🟢 Em sentido contrário, destaca-se a queda da *gasolina* (-3,20% e impacto de -0,17 p.p.), subitem de maior deflação individual no índice do mês.
+🟢 Entre os subitens, a queda da *gasolina* (-3,20% e impacto de -0,17 p.p.) exerceu a maior contenção individual sobre o índice.
 
 📈 O *IPCA acumulado em 12 meses* até abril ficou em *3,10%*, abaixo dos 3,55% registrados nos 12 meses encerrados em março.

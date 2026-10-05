@@ -49,7 +49,7 @@ python -m pytest -q -m "not integration"
 ```
 
 O gate roda sobre 18 casos: as duas notas de referência (IPCA abr/2026,
-IPCA-15 mai/2026) mais 16 casos sintéticos que forçam os cantos onde um port
+IPCA-15 mai/2026) mais 20 casos sintéticos que forçam os cantos onde um port
 costuma divergir — arredondamento de borda, heurística de gênero do artigo,
 desempate de impacto, deflação, as quatro variações de frase por trimestre e
 os ramos em que falta um dado.

@@ -19,11 +19,11 @@ import sys
 from pathlib import Path
 
 from fontes.bcb import enriquecer
-from fontes.ibge import buscar_resultado
+from fontes.ibge import buscar_resultado, buscar_variacoes
+from fontes.modelo import serializar
 from nucleo.impacto import calcular_impacto
 from nucleo.montador import compor_nota
 from analise.versoes import CAMPOS_TARDIOS, arquivar, tem_dados_tardios
-from tests.equivalencia.dump_python import serializar
 
 SAIDA = Path(__file__).parent / "saida"
 
@@ -72,13 +72,9 @@ def main(indicador: str, mes_ref: str, atualizar: bool = False) -> None:
     for n in (1, 2, 3, 12):
         mes = _mes_menos(mes_ref, n)
         try:
-            h = buscar_resultado(indicador, mes)
+            historico[mes] = buscar_variacoes(indicador, mes)
         except Exception as e:  # noqa: BLE001
             print(f"aviso: histórico de {mes} indisponível ({e})", file=sys.stderr)
-            continue
-        historico[mes] = {
-            i.nome: i.variacao for i in h.grupos + h.subitens if i.variacao is not None
-        }
     (pasta / "historico.json").write_text(
         json.dumps(historico, ensure_ascii=False, indent=1), encoding="utf-8"
     )
